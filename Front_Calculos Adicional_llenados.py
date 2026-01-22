@@ -5,6 +5,9 @@ import pandas as pd
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# -------------------------
+# Catálogo de estados
+# -------------------------
 ESTADO_NOMBRE_A_CLAVE = {
     "aguascalientes": "ags",
     "baja california": "bc",
@@ -40,24 +43,24 @@ ESTADO_NOMBRE_A_CLAVE = {
     "zacatecas": "zac"
 }
 
-def descargar_data(nombre_estado, clave):
-    
-    # Colocar estado en mismo formato
-    estado = ESTADO_NOMBRE_A_CLAVE.get(nombre_estado.lower())
+# -------------------------
+# Funciones principales
+# -------------------------
 
-    # Normalizar clave a 5 dígitos
+@st.cache_data(show_spinner=False)
+def descargar_data_cache(nombre_estado, clave):
+    """
+    Descarga la data de CONAGUA y la cachea para acelerar futuras ejecuciones
+    """
+    estado = ESTADO_NOMBRE_A_CLAVE.get(nombre_estado.lower())
     clave = str(clave).zfill(5)
 
-    # Construcción de URL
     base = "https://smn.conagua.gob.mx/tools/RESOURCES/Normales_Climatologicas"
     TIPO = "Mensuales"
     PREF = "mes"
     url = f"{base}/{TIPO}/{estado}/{PREF}{clave}.txt"
-    
-    # Solicitud de data
-    r = requests.get(url, verify=False)
 
-    # Comprobación de existencia de data y return
+    r = requests.get(url, verify=False)
     if r.status_code == 200 and len(r.text) > 50:
         return {
             "ok": True,
@@ -79,21 +82,21 @@ def descargar_data(nombre_estado, clave):
             "mensaje": f"La estación {clave} no existe o no tiene datos mensuales en {nombre_estado}"
         }
 
+
 def estacion_operando(texto):
     for linea in texto.splitlines():
         if "SITUACIÓN" in linea:
             return "OPERANDO" in linea.upper()
     return False
 
+
 def extraer_bloque_lluvia_maxima(texto):
     lineas = texto.splitlines()
     inicio = None
-
     for i, l in enumerate(lineas):
         if l.strip() == "LLUVIA MÁXIMA 24 H.":
             inicio = i + 2
             break
-
     if inicio is None:
         return []
 
@@ -102,13 +105,16 @@ def extraer_bloque_lluvia_maxima(texto):
         if l.strip() == "" or not l.strip()[0].isdigit():
             break
         datos.append(l)
-
     return datos
 
-def parsear_lluvia_maxima(texto, anio_min=1980, min_meses=9):
+
+@st.cache_data(show_spinner=False)
+def parsear_lluvia_cache(texto, anio_min=1980, min_meses=9):
+    """
+    Parseo de bloque de lluvia máxima con cache
+    """
     filas = extraer_bloque_lluvia_maxima(texto)
     registros = []
-
     for fila in filas:
         cols = fila.split()
         try:
@@ -128,15 +134,18 @@ def parsear_lluvia_maxima(texto, anio_min=1980, min_meses=9):
         })
 
     df = pd.DataFrame(registros)
-
     if not df.empty:
         df = df.sort_values("Lluvia máxima 24h (mm)", ascending=False)
         df["Rank"] = range(1, len(df) + 1)
-
     return df
+
 
 def validar_min_anios(df, min_anios=40):
     return df["Año"].nunique() >= min_anios, df["Año"].nunique()
+
+# -------------------------
+# Interfaz Streamlit
+# -------------------------
 
 st.title("Normales Climatológicas – Lluvia Máxima 24h")
 
@@ -161,7 +170,7 @@ if st.button("Procesar estación"):
         st.stop()
 
     with st.spinner("Descargando información..."):
-        res = descargar_data(estado, clave)
+        res = descargar_data_cache(estado, clave)
 
     if not res["ok"]:
         st.error(res["mensaje"])
@@ -175,7 +184,7 @@ if st.button("Procesar estación"):
     else:
         st.success("Estación operando")
 
-    df_lluvia = parsear_lluvia_maxima(
+    df_lluvia = parsear_lluvia_cache(
         res["contenido"],
         anio_min=anio_min,
         min_meses=min_meses
